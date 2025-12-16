@@ -2,10 +2,10 @@ name: 'citibike_case_study'
 version: '1.0.0'
 config-version: 2
 
-profile: 'citibike_case_study'
+profile: 'default'
 
 model-paths: ['models']
-analysis-paths: ['analysis']
+analysis-paths: ['analyses']
 test-paths: ['tests']
 seed-paths: ['seeds']
 macro-paths: ['macros']
@@ -17,7 +17,7 @@ clean-targets:
   - 'dbt_packages'
 
 models:
-  citibike_case_study:
+  citibike-dbt:
 
     staging:
       +materialized: view

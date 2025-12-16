@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: cleansed
+    database: CLEANSED_CITIBIKE
+    schema: CORE
+    tables:
+      - name: CITIBIKE_TRIPS_CLEAN
+      - name: WEATHER_NYC_CLEAN
