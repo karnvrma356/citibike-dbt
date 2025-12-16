@@ -1,16 +1,16 @@
-{{ config(materialized='table' }}
+{{ config(materialized='table') }}
 
-with stg as (
+with s as (
   select *
   from {{ ref('STG_1_FACT_TRIPS_DAILY') }}
 ),
 
-dim_city as (
-  select city_id, city_sk
-  from {{ ref('DIM_CITY') }}
+dim_wc as (
+  select weather_condition, weather_condition_sk
+  from {{ ref('DIM_WEATHER_CONDITION') }}
 ),
 
-dim_weather as (
+dim_w as (
   select weather_id, weather_sk
   from {{ ref('DIM_WEATHER') }}
 ),
@@ -19,9 +19,8 @@ final as (
   select
     /* keys (TOP) */
     s.date_key,
-    s.weather_condition_sk,
-    coalesce(dc.city_sk, sha2('-1',256))     as city_sk,
-    coalesce(dw.weather_sk, sha2('-1',256))  as weather_sk,
+    coalesce(dw.weather_sk, sha2('-1',256)) as weather_sk,
+    coalesce(dwc.weather_condition_sk, sha2('UNKNOWN',256)) as weather_condition_sk,
 
     /* dates */
     s.trip_date,
@@ -31,7 +30,6 @@ final as (
     s.avg_duration_sec,
     s.avg_distance_km,
     s.total_distance_km,
-
     s.avg_temp_k,
     s.avg_humidity_pct,
     s.avg_cloud_pct,
@@ -42,11 +40,10 @@ final as (
     s.src_load_ts_nz,
     current_timestamp()::timestamp_ntz as fact_load_ts_utc,
     {{ to_nz('current_timestamp()') }} as fact_load_ts_nz
-
-  from stg s
-  left join dim_city dc
-    on s.city_id = dc.city_id
-  left join dim_weather dw
+  from s
+  left join dim_wc dwc
+    on upper(coalesce(s.weather_condition,'UNKNOWN')) = dwc.weather_condition
+  left join dim_w dw
     on s.weather_id = dw.weather_id
 )
 

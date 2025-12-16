@@ -1,23 +1,22 @@
 name: 'citibike_case_study'
-version: '1.0.0'
+version: "1.0.0"
 config-version: 2
 
 profile: 'default'
 
-model-paths: ['models']
-analysis-paths: ['analyses']
-test-paths: ['tests']
-seed-paths: ['seeds']
-macro-paths: ['macros']
-snapshot-paths: ['snapshots']
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
 
-target-path: 'target'
-clean-targets:
-  - 'target'
-  - 'dbt_packages'
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
 
 models:
-  citibike-dbt:
+  "citibike-dbt":
+    +database: REFINED_CITIBIKE
 
     staging:
       +materialized: view

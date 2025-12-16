@@ -1,66 +1,48 @@
-{{ config(materialized='incremental', unique_key='trip_sk') }}
+{{ config(materialized='table') }}
 
 with t as (
   select *
   from {{ ref('STG_1_FACT_CITIBIKE_TRIPS') }}
+  where is_valid = true
+    and is_duplicate = false
 ),
 
-d_user as (
-  select user_type_sk, user_type
+dim_station as (
+  select station_id, station_sk
+  from {{ ref('DIM_STATION') }}
+),
+
+dim_user as (
+  select user_type, user_type_sk
   from {{ ref('DIM_USER_TYPE') }}
 ),
 
-d_station as (
-  select station_sk, station_id
-  from {{ ref('DIM_STATION') }}
+final as (
+  select
+    /* keys (TOP) */
+    to_number(to_char(t.trip_date,'YYYYMMDD')) as date_key,
+    coalesce(ds1.station_sk, sha2('-1',256))   as start_station_sk,
+    coalesce(ds2.station_sk, sha2('-1',256))   as end_station_sk,
+    coalesce(du.user_type_sk, sha2('UNKNOWN',256)) as user_type_sk,
+
+    /* dates */
+    t.trip_date,
+    t.start_time,
+    t.stop_time,
+
+    /* measures */
+    t.tripduration_sec,
+    t.distance_km,
+
+    /* metadata (END) */
+    t.src_load_ts_utc,
+    t.src_load_ts_nz,
+    current_timestamp()::timestamp_ntz as fact_load_ts_utc,
+    {{ to_nz('current_timestamp()') }} as fact_load_ts_nz
+  from t
+  left join dim_station ds1 on t.start_station_id = ds1.station_id
+  left join dim_station ds2 on t.end_station_id   = ds2.station_id
+  left join dim_user du     on upper(coalesce(t.user_type,'UNKNOWN')) = du.user_type
 )
 
-select
-  /* keys */
-  t.trip_sk,
-  coalesce(u.user_type_sk, '-1') as user_type_sk,
-  coalesce(ss.station_sk, '-1')  as start_station_sk,
-  coalesce(es.station_sk, '-1')  as end_station_sk,
-
-  /* dates/times */
-  t.trip_date,
-  t.start_ts,
-  t.stop_ts,
-
-  /* measures */
-  t.tripduration_sec,
-  t.distance_km,
-
-  /* descriptive degenerate attributes (optional but fine) */
-  t.bike_id,
-  t.birth_year,
-  t.gender,
-
-  /* flags */
-  t.is_valid,
-  t.error_reason,
-
-  /* metadata (END) */
-  t.file_name,
-  t.src_load_ts_utc,
-  t.src_load_ts_nz,
-  t.dup_count,
-  t.is_duplicate,
-  t.dup_rank,
-  t.stg_load_ts_utc,
-  t.stg_load_ts_nz,
-  t.raw_record,
-  current_timestamp() as fact_load_ts_utc,
-  {{ to_nz('current_timestamp()') }} as fact_load_ts_nz
-
-from t
-left join d_user u
-  on u.user_type = t.user_type
-left join d_station ss
-  on ss.station_id = t.start_station_id
-left join d_station es
-  on es.station_id = t.end_station_id
-
-{% if is_incremental() %}
-where t.trip_sk not in (select trip_sk from {{ this }})
-{% endif %}
+select * from final
