@@ -1,4 +1,4 @@
-{{ config(materialized='table', schema='MART') }}
+{{ config(materialized='table') }}
 
 with base as (
   select distinct
@@ -7,7 +7,6 @@ with base as (
     weather_desc,
     weather_icon,
 
-    /* metadata */
     max(src_load_ts_utc) as src_load_ts_utc,
     max(src_load_ts_nz)  as src_load_ts_nz
   from {{ ref('STG_1_DIM_WEATHER_NYC') }}
@@ -17,8 +16,13 @@ with base as (
 
 dim as (
   select
-    /* surrogate + business key (TOP) */
-    sha2(to_varchar(weather_id) || '|' || coalesce(weather_main,'') || '|' || coalesce(weather_desc,''), 256) as weather_sk,
+    /* keys (TOP) */
+    sha2(
+      to_varchar(weather_id) || '|' ||
+      coalesce(weather_main,'') || '|' ||
+      coalesce(weather_desc,''),
+      256
+    ) as weather_sk,
     weather_id,
 
     /* descriptions */

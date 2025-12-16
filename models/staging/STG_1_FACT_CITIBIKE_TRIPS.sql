@@ -1,90 +1,68 @@
 {{ config(materialized='view') }}
 
-with base as (
-    select *
-    from {{ source('cleansed', 'CITIBIKE_TRIPS_CLEAN') }}
+with src as (
+  select *
+  from {{ source('cleansed', 'CITIBIKE_TRIPS_CLEAN') }}
+  where dup_rank = 1
 ),
 
-dedup as (
-    select *
-    from base
-    where dup_rank = 1
-),
+typed as (
+  select
+    /* business keys (TOP) */
+    bike_id,
+    row_num,
 
-final as (
-    select
-        /* =====================================================
-           BUSINESS KEYS / IDS (TOP)
-        ====================================================== */
-        row_hash                        as trip_sk,
-        bike_id                         as bike_id,
-        start_station_id,
-        end_station_id,
+    /* dates/times */
+    trip_date,
+    start_time,
+    stop_time,
 
-        /* =====================================================
-           DATES / TIMES
-        ====================================================== */
-        trip_date,
-        start_time                      as start_ts,
-        stop_time                       as stop_ts,
+    /* descriptive (trip context) */
+    start_station_id,
+    start_station_name,
+    start_lat,
+    start_lng,
 
-        /* =====================================================
-           DESCRIPTIVE ATTRIBUTES
-        ====================================================== */
-        start_station_name,
-        end_station_name,
+    end_station_id,
+    end_station_name,
+    end_lat,
+    end_lng,
 
-        -- needed for dim_station build
-        start_lat,
-        start_lng,
-        end_lat,
-        end_lng,
+    user_type,
+    birth_year,
+    gender,
 
-        upper(coalesce(user_type,'UNKNOWN')) as user_type,
-        birth_year,
-        gender,
+    /* measures */
+    tripduration_seconds                    as tripduration_sec,
+    duration_seconds_calc                  as duration_seconds_calc,
 
-        /* =====================================================
-           MEASURES (FACTS)
-        ====================================================== */
-        tripduration_seconds            as tripduration_sec,
+    /* haversine distance (km) */
+    2 * 6371 * asin(
+      sqrt(
+        pow(sin(radians((start_lat - end_lat)/2)), 2) +
+        cos(radians(end_lat)) * cos(radians(start_lat)) *
+        pow(sin(radians((start_lng - end_lng)/2)), 2)
+      )
+    ) as distance_km,
 
-        case
-            when start_lat is null or start_lng is null
-              or end_lat   is null or end_lng   is null
-            then null
-            else 2 * 6371 * asin(
-                sqrt(
-                    pow(sin(radians((end_lat - start_lat) / 2)), 2) +
-                    cos(radians(start_lat)) * cos(radians(end_lat)) *
-                    pow(sin(radians((end_lng - start_lng) / 2)), 2)
-                )
-            )
-        end as distance_km,
+    /* quality */
+    is_valid,
+    error_reason,
 
-        /* =====================================================
-           DATA QUALITY FLAGS
-        ====================================================== */
-        is_valid,
-        error_reason,
+    /* metadata (END) */
+    file_name,
+    load_ts                                as src_load_ts_utc,
+    {{ to_nz('load_ts') }}                 as src_load_ts_nz,
+    current_timestamp()::timestamp_ntz     as stg_load_ts_utc,
+    {{ to_nz('current_timestamp()') }}     as stg_load_ts_nz,
 
-        /* =====================================================
-           METADATA (ALWAYS AT END)
-        ====================================================== */
-        file_name,
-        load_ts                         as src_load_ts_utc,
-        {{ to_nz('load_ts') }}          as src_load_ts_nz,
+    row_hash,
+    dup_count,
+    is_duplicate,
+    dup_rank,
 
-        dup_count,
-        is_duplicate,
-        dup_rank,
-
-        current_timestamp()             as stg_load_ts_utc,
-        {{ to_nz('current_timestamp()') }} as stg_load_ts_nz,
-
-        raw_record
-
-    from dedup
+    raw_record
+  from src
 )
 
-select * from final
+select * from typed
