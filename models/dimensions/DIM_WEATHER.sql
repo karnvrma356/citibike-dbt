@@ -1,20 +1,20 @@
 {{ config(materialized='table') }}
 
 with base as (
-  select distinct
+  select
     weather_id,
     weather_main,
     weather_desc,
     weather_icon,
-
+    weather_condition,
     max(src_load_ts_utc) as src_load_ts_utc,
     max(src_load_ts_nz)  as src_load_ts_nz
   from {{ ref('STG_1_DIM_WEATHER_NYC') }}
   where weather_id is not null
-  group by 1,2,3,4
+  group by all
 ),
 
-dim as (
+ranked as (
   select
     /* keys (TOP) */
     sha2(
@@ -29,13 +29,45 @@ dim as (
     weather_main,
     weather_desc,
     weather_icon,
+    weather_condition,
 
     /* metadata (END) */
     src_load_ts_utc,
     src_load_ts_nz,
     current_timestamp()::timestamp_ntz as dim_load_ts_utc,
-    {{ to_nz('current_timestamp()') }} as dim_load_ts_nz
+    {{ to_nz('current_timestamp()') }} as dim_load_ts_nz,
+
+    row_number() over (
+      partition by
+        sha2(
+          to_varchar(weather_id) || '|' ||
+          coalesce(weather_main,'') || '|' ||
+          coalesce(weather_desc,''),
+          256
+        )
+      order by
+        src_load_ts_utc desc,
+        src_load_ts_nz  desc,
+        weather_icon    desc,
+        weather_condition desc
+    ) as rn
   from base
+),
+
+dim as (
+  select
+    weather_sk,
+    weather_id,
+    weather_main,
+    weather_desc,
+    weather_icon,
+    weather_condition,
+    src_load_ts_utc,
+    src_load_ts_nz,
+    dim_load_ts_utc,
+    dim_load_ts_nz
+  from ranked
+  qualify rn = 1
 ),
 
 unknown as (
@@ -45,11 +77,12 @@ unknown as (
     'Unknown'      as weather_main,
     'Unknown'      as weather_desc,
     null::string   as weather_icon,
+    'Unknown'      as weather_condition,
 
-    current_timestamp()::timestamp_ntz as src_load_ts_utc,
-    {{ to_nz('current_timestamp()') }} as src_load_ts_nz,
-    current_timestamp()::timestamp_ntz as dim_load_ts_utc,
-    {{ to_nz('current_timestamp()') }} as dim_load_ts_nz
+    null::timestamp_ntz                 as src_load_ts_utc,
+    null::timestamp_ntz                 as src_load_ts_nz,
+    current_timestamp()::timestamp_ntz  as dim_load_ts_utc,
+    {{ to_nz('current_timestamp()') }}  as dim_load_ts_nz
 )
 
 select * from unknown

@@ -5,11 +5,6 @@ with s as (
   from {{ ref('STG_1_FACT_TRIPS_DAILY') }}
 ),
 
-dim_wc as (
-  select weather_condition, weather_condition_sk
-  from {{ ref('DIM_WEATHER_CONDITION') }}
-),
-
 dim_w as (
   select weather_id, weather_sk
   from {{ ref('DIM_WEATHER') }}
@@ -20,7 +15,7 @@ final as (
     /* keys (TOP) */
     s.date_key,
     coalesce(dw.weather_sk, sha2('-1',256)) as weather_sk,
-    coalesce(dwc.weather_condition_sk, sha2('UNKNOWN',256)) as weather_condition_sk,
+    
 
     /* dates */
     s.trip_date,
@@ -41,8 +36,6 @@ final as (
     current_timestamp()::timestamp_ntz as fact_load_ts_utc,
     {{ to_nz('current_timestamp()') }} as fact_load_ts_nz
   from s
-  left join dim_wc dwc
-    on upper(coalesce(s.weather_condition,'UNKNOWN')) = dwc.weather_condition
   left join dim_w dw
     on s.weather_id = dw.weather_id
 )
