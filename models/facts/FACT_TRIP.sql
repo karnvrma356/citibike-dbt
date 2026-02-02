@@ -12,6 +12,12 @@ dim_station as (
   from {{ ref('DIM_STATION') }}
 ),
 
+weather as (
+  select *
+  from {{ ref('STG_1_DIM_WEATHER_NYC') }}
+  where is_valid = true
+),
+
 dim_user as (
   select user_type, user_type_sk
   from {{ ref('DIM_USER_TYPE') }}
@@ -24,6 +30,12 @@ final as (
     coalesce(ds1.station_sk, sha2('-1',256))   as start_station_sk,
     coalesce(ds2.station_sk, sha2('-1',256))   as end_station_sk,
     coalesce(du.user_type_sk, sha2('UNKNOWN',256)) as user_type_sk,
+    sha2(
+      to_varchar(weather_id) || '|' ||
+      coalesce(weather_main,'') || '|' ||
+      coalesce(weather_desc,''),
+      256
+    ) as weather_sk,
 
     /* dates */
     t.trip_date,
@@ -43,6 +55,7 @@ final as (
   left join dim_station ds1 on t.start_station_id = ds1.station_id
   left join dim_station ds2 on t.end_station_id   = ds2.station_id
   left join dim_user du     on upper(coalesce(t.user_type,'UNKNOWN')) = du.user_type
-)
+  left join weather w on t.trip_date = w.weather_date
+  )
 
 select * from final
