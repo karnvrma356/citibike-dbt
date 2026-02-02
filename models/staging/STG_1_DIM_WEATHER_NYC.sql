@@ -155,4 +155,4 @@ final as (
   from dedup
 )
 
-select * from final;
+select * from final

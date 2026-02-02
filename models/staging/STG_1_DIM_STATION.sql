@@ -1,61 +1,93 @@
-{{ config(materialized='view') }}
+{{ config(materialized='table') }}
 
 with trips as (
-    select *
+    select
+        start_station_id,
+        start_station_name,
+        start_lat,
+        start_lng,
+
+        end_station_id,
+        end_station_name,
+        end_lat,
+        end_lng,
+
+        load_ts as src_load_ts_utc
     from {{ source('cleansed', 'CITIBIKE_TRIPS_CLEAN') }}
     where dup_rank = 1
       and is_valid = true
 ),
 
-stations as (
-
+stations_union as (
     /* START stations */
     select
-        start_station_id   as station_id,
-        start_station_name as station_name,
-        start_lat          as lat,
-        start_lng          as lon,
-        load_ts            as src_load_ts_utc
+        nullif(trim(start_station_id::string), '') as station_id,
+        nullif(trim(regexp_replace(start_station_name::string, '[[:cntrl:]]', '')), '') as station_name,
+        try_to_double(start_lat) as lat,
+        try_to_double(start_lng) as lon,
+        src_load_ts_utc
     from trips
-    where start_station_id is not null
 
     union all
 
     /* END stations */
     select
-        end_station_id     as station_id,
-        end_station_name   as station_name,
-        end_lat            as lat,
-        end_lng            as lon,
-        load_ts            as src_load_ts_utc
+        nullif(trim(end_station_id::string), '') as station_id,
+        nullif(trim(regexp_replace(end_station_name::string, '[[:cntrl:]]', '')), '') as station_name,
+        try_to_double(end_lat) as lat,
+        try_to_double(end_lng) as lon,
+        src_load_ts_utc
     from trips
-    where end_station_id is not null
 ),
 
-deduped as (
+filtered as (
+    /* drop unusable rows */
+    select *
+    from stations_union
+    where station_id is not null
+      and (station_name is not null or lat is not null or lon is not null)
+),
+
+/* choose the newest record per station_id, but prefer rows with richer data */
+ranked as (
     select
         station_id,
-        max_by(station_name, src_load_ts_utc) as station_name,
-        max_by(lat, src_load_ts_utc)          as lat,
-        max_by(lon, src_load_ts_utc)          as lon,
-        max(src_load_ts_utc)                  as src_load_ts_utc
-    from stations
-    group by station_id
+        station_name,
+        lat,
+        lon,
+        src_load_ts_utc,
+
+        row_number() over (
+            partition by station_id
+            order by
+                /* prefer rows that have name+coords */
+                iff(station_name is not null, 1, 0) desc,
+                iff(lat is not null and lon is not null, 1, 0) desc,
+                src_load_ts_utc desc
+        ) as rn,
+
+        max(src_load_ts_utc) over (partition by station_id) as max_src_load_ts_utc
+    from filtered
+),
+
+final as (
+    select
+        /* keys */
+        sha2(station_id, 256) as station_sk,
+        station_id,
+
+        /* descriptions */
+        station_name,
+        lat,
+        lon,
+
+        /* metadata */
+        max_src_load_ts_utc as src_load_ts_utc,
+        {{ to_nz('max_src_load_ts_utc') }} as src_load_ts_nz,
+        current_timestamp()::timestamp_ntz as stg_load_ts_utc,
+        {{ to_nz('current_timestamp()') }} as stg_load_ts_nz
+    from ranked
+    qualify rn = 1
 )
 
-select
-    /* business key */
-    station_id,
-
-    /* descriptions */
-    station_name,
-    lat,
-    lon,
-
-    /* metadata (END) */
-    src_load_ts_utc,
-    {{ to_nz('src_load_ts_utc') }}            as src_load_ts_nz,
-    current_timestamp()                      as stg_load_ts_utc,
-    {{ to_nz('current_timestamp()') }}       as stg_load_ts_nz
-
-from deduped
+select * from final
