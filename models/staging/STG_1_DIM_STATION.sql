@@ -27,6 +27,7 @@ stations_union as (
         try_to_double(start_lng) as lon,
         src_load_ts_utc
     from trips
+    where start_station_id is not null
 
     union all
 
@@ -38,17 +39,18 @@ stations_union as (
         try_to_double(end_lng) as lon,
         src_load_ts_utc
     from trips
+    where end_station_id is not null
 ),
 
 filtered as (
-    /* drop unusable rows */
     select *
     from stations_union
     where station_id is not null
       and (station_name is not null or lat is not null or lon is not null)
+      and (lat is null or (lat between -90 and 90))
+      and (lon is null or (lon between -180 and 180))
 ),
 
-/* choose the newest record per station_id, but prefer rows with richer data */
 ranked as (
     select
         station_id,
@@ -60,7 +62,6 @@ ranked as (
         row_number() over (
             partition by station_id
             order by
-                /* prefer rows that have name+coords */
                 iff(station_name is not null, 1, 0) desc,
                 iff(lat is not null and lon is not null, 1, 0) desc,
                 src_load_ts_utc desc
@@ -68,26 +69,18 @@ ranked as (
 
         max(src_load_ts_utc) over (partition by station_id) as max_src_load_ts_utc
     from filtered
-),
-
-final as (
-    select
-        /* keys */
-        sha2(station_id, 256) as station_sk,
-        station_id,
-
-        /* descriptions */
-        station_name,
-        lat,
-        lon,
-
-        /* metadata */
-        max_src_load_ts_utc as src_load_ts_utc,
-        {{ to_nz('max_src_load_ts_utc') }} as src_load_ts_nz,
-        current_timestamp()::timestamp_ntz as stg_load_ts_utc,
-        {{ to_nz('current_timestamp()') }} as stg_load_ts_nz
-    from ranked
-    qualify rn = 1
 )
 
-select * from final
+select
+    sha2(station_id, 256)::string as station_sk,
+    station_id::number(38,0)      as station_id,
+    station_name,
+    lat,
+    lon,
+
+    max_src_load_ts_utc as src_load_ts_utc,
+    {{ to_nz('max_src_load_ts_utc') }} as src_load_ts_nz,
+    current_timestamp()::timestamp_ntz as stg_load_ts_utc,
+    {{ to_nz('current_timestamp()') }} as stg_load_ts_nz
+from ranked
+qualify rn = 1

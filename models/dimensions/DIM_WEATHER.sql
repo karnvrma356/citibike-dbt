@@ -59,7 +59,7 @@ dim as (
         weather_main,
         weather_desc,
         weather_icon,
-        weather_condition,
+        upper(weather_condition) as weather_condition,
 
         /* keep latest seen timestamps for lineage */
         src_load_ts_utc,
@@ -78,7 +78,7 @@ unknown as (
         'Unknown'      as weather_main,
         'Unknown'      as weather_desc,
         null::string   as weather_icon,
-        'Unknown'      as weather_condition,
+        'UNKNOWN'      as weather_condition,
         null::timestamp_ntz                 as src_load_ts_utc,
         null::timestamp_ntz                 as src_load_ts_nz,
         current_timestamp()::timestamp_ntz  as dim_load_ts_utc,

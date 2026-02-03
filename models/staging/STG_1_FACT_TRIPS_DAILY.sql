@@ -1,81 +1,109 @@
 {{ config(materialized='view') }}
 
 with trips as (
-  select *
+  select
+    trip_sk,
+    trip_date,
+    to_number(to_char(trip_date,'YYYYMMDD')) as date_key,
+    duration_seconds_calc,
+    distance_km
   from {{ ref('STG_1_FACT_CITIBIKE_TRIPS') }}
-  where is_valid = true
-    and is_duplicate = false
 ),
 
-weather as (
-  select *
-  from {{ ref('STG_1_DIM_WEATHER_NYC') }}
-  where is_valid = true
-),
-
-trip_daily as (
+bridge as (
   select
-    trip_date                                   as trip_date,
-    to_number(to_char(trip_date,'YYYYMMDD'))    as date_key,
-
-    count(*)                                    as trip_count,
-    avg(tripduration_sec)                       as avg_duration_sec,
-    avg(distance_km)                            as avg_distance_km,
-    sum(distance_km)                            as total_distance_km
-  from trips
-  group by all
+    trip_sk,
+    dim_weather_sk
+  from {{ ref('BRG_TRIP_WEATHER_AT_START') }}
 ),
 
-weather_daily as (
+weather_obs as (
   select
-    weather_date                                as trip_date,
-    to_number(to_char(weather_date,'YYYYMMDD')) as date_key,
-
-    /* NYC constant-like keys for context (still fine) */
-    max(city_id)                                as city_id,
-    max_by(weather_id, src_load_ts_utc)         as weather_id,
-
+    dim_weather_sk,
+    weather_id,
+    weather_main,
+    weather_desc,
     upper(coalesce(weather_condition,'UNKNOWN')) as weather_condition,
-
-    avg(temp_k)                                  as avg_temp_k,
-    avg(humidity_pct)                            as avg_humidity_pct,
-    avg(cloud_pct)                               as avg_cloud_pct,
-    avg(wind_speed)                              as avg_wind_speed,
-
-    max(src_load_ts_utc)                         as src_load_ts_utc,
-    max(src_load_ts_nz)                          as src_load_ts_nz
-  from weather
-  group by all
+    temp_k,
+    humidity_pct,
+    cloud_pct,
+    wind_speed,
+    src_load_ts_utc,
+    src_load_ts_nz
+  from {{ ref('STG_1_DIM_WEATHER_NYC') }}
 ),
 
-final as (
+/* Join trips -> bridge -> weather observation */
+trip_weather as (
   select
-    /* business keys (TOP) */
-    td.date_key,
-    td.trip_date,
-    wd.weather_condition,
-    wd.city_id,
-    wd.weather_id,
+    t.trip_date,
+    t.date_key,
 
-    /* measures */
-    td.trip_count,
-    td.avg_duration_sec,
-    td.avg_distance_km,
-    td.total_distance_km,
+    t.duration_seconds_calc,
+    t.distance_km,
 
-    wd.avg_temp_k,
-    wd.avg_humidity_pct,
-    wd.avg_cloud_pct,
-    wd.avg_wind_speed,
+    w.weather_id,
+    w.weather_main,
+    w.weather_desc,
+    coalesce(w.weather_condition, 'UNKNOWN') as weather_condition,
 
-    /* metadata (END) */
-    wd.src_load_ts_utc,
-    wd.src_load_ts_nz,
-    current_timestamp()::timestamp_ntz     as stg_load_ts_utc,
-    {{ to_nz('current_timestamp()') }}     as stg_load_ts_nz
-  from trip_daily td
-  left join weather_daily wd
-    on td.date_key = wd.date_key
+    w.temp_k,
+    w.humidity_pct,
+    w.cloud_pct,
+    w.wind_speed,
+
+    w.src_load_ts_utc,
+    w.src_load_ts_nz
+  from trips t
+  left join bridge b
+    on t.trip_sk = b.trip_sk
+  left join weather_obs w
+    on b.dim_weather_sk = w.dim_weather_sk
+),
+
+/* Map to DIM_WEATHER so FACT has a proper key */
+dim_weather as (
+  select
+    weather_sk,
+    weather_id,
+    weather_main,
+    weather_desc
+  from {{ ref('DIM_WEATHER') }}
+),
+
+daily as (
+  select
+    tw.trip_date,
+    tw.date_key,
+
+    coalesce(dw.weather_sk, sha2('-1',256)) as weather_sk,
+    tw.weather_condition,
+
+    count(*) as trip_count,
+    avg(tw.duration_seconds_calc) as avg_duration_sec,
+    avg(tw.distance_km) as avg_distance_km,
+    sum(tw.distance_km) as total_distance_km,
+
+    avg(tw.temp_k) as avg_temp_k,
+    avg(tw.humidity_pct) as avg_humidity_pct,
+    avg(tw.cloud_pct) as avg_cloud_pct,
+    avg(tw.wind_speed) as avg_wind_speed,
+
+    max(tw.src_load_ts_utc) as src_load_ts_utc,
+    max(tw.src_load_ts_nz)  as src_load_ts_nz,
+
+    current_timestamp()::timestamp_ntz as stg_load_ts_utc,
+    {{ to_nz('current_timestamp()') }} as stg_load_ts_nz
+  from trip_weather tw
+  left join dim_weather dw
+    on dw.weather_id = tw.weather_id
+   and coalesce(dw.weather_main,'') = coalesce(tw.weather_main,'')
+   and coalesce(dw.weather_desc,'') = coalesce(tw.weather_desc,'')
+  group by
+    tw.trip_date,
+    tw.date_key,
+    coalesce(dw.weather_sk, sha2('-1',256)),
+    tw.weather_condition
 )
 
-select * from final
+select * from daily

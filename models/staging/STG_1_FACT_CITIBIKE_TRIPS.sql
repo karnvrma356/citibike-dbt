@@ -4,20 +4,23 @@ with src as (
   select *
   from {{ source('cleansed', 'CITIBIKE_TRIPS_CLEAN') }}
   where dup_rank = 1
+    and is_valid = true
+    and coalesce(is_duplicate,false) = false
 ),
 
 typed as (
   select
-    /* business keys (TOP) */
+    /* stable trip key (critical for bridges/facts) */
+    sha2(row_hash, 256) as trip_sk,
+    row_hash            as trip_row_hash,
+
+    /* core fields */
     bike_id,
     row_num,
-
-    /* dates/times */
     trip_date,
     start_time,
     stop_time,
 
-    /* descriptive (trip context) */
     start_station_id,
     start_station_name,
     start_lat,
@@ -32,34 +35,25 @@ typed as (
     birth_year,
     gender,
 
-    /* measures */
-    tripduration_seconds                    as tripduration_sec,
-    duration_seconds_calc                  as duration_seconds_calc,
+    tripduration_seconds::number(38,0)  as tripduration_sec,
+    duration_seconds_calc::number(18,0) as duration_seconds_calc,
 
-    /* haversine distance (km) */
+    /* correct haversine (km) */
     2 * 6371 * asin(
       sqrt(
-        pow(sin(radians((start_lat - end_lat)/2)), 2) +
-        cos(radians(end_lat)) * cos(radians(start_lat)) *
-        pow(sin(radians((start_lng - end_lng)/2)), 2)
+        pow(sin(radians((end_lat - start_lat) / 2)), 2) +
+        cos(radians(start_lat)) * cos(radians(end_lat)) *
+        pow(sin(radians((end_lng - start_lng) / 2)), 2)
       )
     ) as distance_km,
 
-    /* quality */
-    is_valid,
     error_reason,
 
-    /* metadata (END) */
     file_name,
     load_ts                                as src_load_ts_utc,
     {{ to_nz('load_ts') }}                 as src_load_ts_nz,
     current_timestamp()::timestamp_ntz     as stg_load_ts_utc,
     {{ to_nz('current_timestamp()') }}     as stg_load_ts_nz,
-
-    row_hash,
-    dup_count,
-    is_duplicate,
-    dup_rank,
 
     raw_record
   from src

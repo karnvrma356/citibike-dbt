@@ -1,7 +1,7 @@
 {{ config(materialized='table') }}
 
-with base as (
-  select distinct
+with src as (
+  select
     city_id,
     city_name,
     city_findname,
@@ -9,35 +9,47 @@ with base as (
     city_lat,
     city_lon,
     city_zoom,
-
-    /* metadata */
-    max(src_load_ts_utc) as src_load_ts_utc,
-    max(src_load_ts_nz)  as src_load_ts_nz
+    src_load_ts_utc,
+    src_load_ts_nz
   from {{ ref('STG_1_DIM_WEATHER_NYC') }}
   where city_id is not null
-  group by 1,2,3,4,5,6,7
+),
+
+ranked as (
+  select
+    sha2(to_varchar(city_id), 256) as city_sk,
+    city_id,
+    city_name,
+    city_findname,
+    country,
+    city_lat,
+    city_lon,
+    city_zoom,
+    src_load_ts_utc,
+    src_load_ts_nz,
+    row_number() over (
+      partition by city_id
+      order by src_load_ts_utc desc nulls last
+    ) as rn
+  from src
 ),
 
 dim as (
   select
-    /* surrogate + business key (TOP) */
-    sha2(to_varchar(city_id), 256) as city_sk,
+    city_sk,
     city_id,
-
-    /* descriptions */
     city_name,
     city_findname,
     country,
     city_lat,
     city_lon,
     city_zoom,
-
-    /* metadata (END) */
     src_load_ts_utc,
     src_load_ts_nz,
     current_timestamp()::timestamp_ntz as dim_load_ts_utc,
     {{ to_nz('current_timestamp()') }} as dim_load_ts_nz
-  from base
+  from ranked
+  qualify rn = 1
 ),
 
 unknown as (
@@ -50,9 +62,8 @@ unknown as (
     null::float    as city_lat,
     null::float    as city_lon,
     null::number   as city_zoom,
-
-    current_timestamp()::timestamp_ntz as src_load_ts_utc,
-    {{ to_nz('current_timestamp()') }} as src_load_ts_nz,
+    null::timestamp_ntz as src_load_ts_utc,
+    null::timestamp_ntz as src_load_ts_nz,
     current_timestamp()::timestamp_ntz as dim_load_ts_utc,
     {{ to_nz('current_timestamp()') }} as dim_load_ts_nz
 )
